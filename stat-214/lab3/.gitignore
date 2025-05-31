@@ -1,0 +1,21 @@
+data/*
+!data/raw_text.pkl
+*.pt
+*.pt
+
+# === Python cache ===
+__pycache__/
+*.pyc
+
+# === Jupyter notebook checkpoints ===
+.ipynb_checkpoints/
+
+# === Temporary data/model artifacts ===
+*.npy
+*.pkl
+*.h5
+
+# === Result files ===
+results/*
+!results/.gitkeep
+

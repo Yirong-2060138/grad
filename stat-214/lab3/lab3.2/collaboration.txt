@@ -1,0 +1,9 @@
+3.2
+Joergen Jore
+-  Wrote the code for encoder, train encoder and related sections in report. 
+Yirong Huo
+- Code and report for embeddings part
+Wentio Li
+- Codes and report for parameter tuning and loss analysis
+Nicolas Sapoungzis
+- Conducted Ridge Bootstrap regression analysis and wrote the results, discussion section and part of the methods.

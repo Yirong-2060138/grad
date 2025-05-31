@@ -1,0 +1,9 @@
+3.3
+Joergen Jore
+-  wrote code for part 1 fine tuning and the corresponding sections
+Yirong Huo
+-  wrote code for part 1 baseline bert, enhance the code for fine tunning, and report part for baseline bert.
+Wentio Li
+- code for story 2 tetris, and the the corresponding report sections
+Nicolas Sapoungzis
+- 

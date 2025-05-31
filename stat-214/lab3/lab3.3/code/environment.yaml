@@ -1,0 +1,22 @@
+name: env_214
+channels:
+  - defaults
+  - conda-forge
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - tqdm
+  - transformers
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cudatoolkit=11.8 
+  - peft
+  - pip
+  - pip:
+      - accelerate
