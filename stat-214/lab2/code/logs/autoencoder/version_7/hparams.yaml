@@ -1,0 +1,5 @@
+embedding_size: 8
+n_input_channels: 8
+optimizer_config:
+  lr: 0.001
+patch_size: 9

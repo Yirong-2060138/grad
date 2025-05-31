@@ -1,0 +1,33 @@
+{
+  "os":  "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "python":  "CPython 3.13.2",
+  "startedAt":  "2025-03-13T21:00:49.067690Z",
+  "args":  [
+    "configs/default.yaml"
+  ],
+  "program":  "/home/yukiasa118/stats/stat214/stat-214/lab2/code/run_autoencoder.py",
+  "codePath":  "lab2/code/run_autoencoder.py",
+  "git":  {
+    "remote":  "https://github.com/yukiasa118/stat-214",
+    "commit":  "918de6709cd0c82c4fad8544d2c75cf2bbf1fefe"
+  },
+  "root":  ".",
+  "host":  "PepeClubTheatre",
+  "executable":  "/home/yukiasa118/miniforge3/envs/stat214/bin/python",
+  "codePathLocal":  "run_autoencoder.py",
+  "cpu_count":  4,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "1081101176832",
+      "used":  "33458376704"
+    }
+  },
+  "memory":  {
+    "total":  "4035731456"
+  },
+  "cpu":  {
+    "count":  4,
+    "countLogical":  8
+  }
+}

@@ -1,0 +1,14 @@
+# ignore `code/data/` 
+code/data/
+
+# ignore `data/` 
+data/
+code/logs/slurm-*
+code/logs/**/slurm-*
+
+
+# ignore raw data
+data_labeled_raw
+
+
+.DS_Store

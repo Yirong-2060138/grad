@@ -1,0 +1,20 @@
+We have all agreed on these attributions:
+
+Yirong worked on:
+EDA and Feature engineering for NDAIs and Gradients of NDAIs
+Report part for EDA and Feature engineering parts above
+
+Wentio Li worked on:
+Codes for Transfer learning
+Report part for Transfer learning
+
+Joergen worked on:
+Code for modeling
+Report part for modeling
+
+-
+
+____ worked on:
+-
+-
+

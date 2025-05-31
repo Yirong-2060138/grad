@@ -1,0 +1,598 @@
+# models/xgboost_analysis.py
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, List, Tuple
+from xgboost import XGBClassifier, plot_importance
+from sklearn.metrics import roc_auc_score, classification_report, roc_curve, precision_recall_curve, confusion_matrix
+from helper import load_labeled_data, get_feature_names, compute_permutation_importance
+
+def train_and_analyze_xgboost(
+    use_raw_features: bool = True,
+    use_autoencoder_features: bool = True,
+    include_extra_features: bool = True,
+    calculate_importance: bool = True,
+    validation_reporting: bool = True
+) -> Dict:
+    """
+    Trains an XGBoost classifier with detailed analysis of performance and feature importance.
+    
+    Args:
+        use_raw_features: Whether to include raw features
+        use_autoencoder_features: Whether to include autoencoder features
+        include_extra_features: Whether to include extra engineered features
+        calculate_importance: Whether to calculate feature importance
+        validation_reporting: Whether to generate validation curves
+    
+    Returns:
+        Dict: Dictionary with model, performance metrics, and analysis results
+    """
+    # Create a feature description for reporting
+    feature_desc = []
+    if use_raw_features:
+        feature_desc.append("raw")
+    if use_autoencoder_features:
+        feature_desc.append("autoencoder")
+    if include_extra_features and use_raw_features:
+        feature_desc.append("extra engineered")
+    feature_str = " + ".join(feature_desc)
+    
+    print(f"\nTraining XGBoost with {feature_str} features...")
+    
+    # Load labeled data with all features
+    X_train, X_val, X_test, y_train, y_val, y_test = load_labeled_data(
+        use_raw_features=use_raw_features,
+        use_autoencoder_features=use_autoencoder_features,
+        include_extra_features=include_extra_features,
+        test_size=0.2, 
+        val_size=0.2, 
+        random_state=42
+    )
+    
+    print(f"Training data shape: {X_train.shape}")
+    print(f"Validation data shape: {X_val.shape}")
+    print(f"Test data shape: {X_test.shape}")
+    
+    # Set up XGBoost hyperparameters
+    params = {
+        'max_depth': 6,
+        'learning_rate': 0.1,
+        'n_estimators': 300,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'objective': 'binary:logistic',
+        'eval_metric': 'auc',  # Moving this to the fit method
+        'use_label_encoder': False,
+        'tree_method': 'hist',  # Faster training method
+        'random_state': 42
+    }
+    
+    # Instantiate XGBoost classifier
+    xgb_model = XGBClassifier(**params)
+    
+    # Lists to store evaluation metrics
+    eval_results = {}
+    
+    # Train with evaluation sets
+    eval_set = [(X_train, y_train), (X_val, y_val)]
+    
+    # Simpler training without callback - we'll extract the evaluation history after training
+    print("Training model...")
+    xgb_model.fit(X_train, y_train, eval_set=eval_set, verbose=True)
+    
+    # Extract evaluation results if available
+    if hasattr(xgb_model, 'evals_result'):
+        eval_results = xgb_model.evals_result()
+    else:
+        print("Warning: Could not extract evaluation history - plots may be limited")
+    
+    # Generate predictions
+    y_pred = xgb_model.predict(X_test)
+    y_proba = xgb_model.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, y_proba)
+    
+    # Print classification report
+    print("\nXGBoost Classification Report (Test Set):")
+    print(classification_report(y_test, y_pred))
+    print(f"XGBoost Test AUC: {test_auc:.3f}")
+    
+    # Create result dictionary
+    result = {
+        "model": f"XGBoost ({feature_str})",
+        "xgb_model": xgb_model,
+        "test_auc": test_auc,
+        "eval_results": eval_results
+    }
+    
+    # Generate diagnostic plots
+    if validation_reporting:
+        plot_learning_curves(eval_results, feature_str)
+        plot_roc_curve(xgb_model, X_test, y_test, feature_str)
+        plot_precision_recall_curve(xgb_model, X_test, y_test, feature_str)
+        plot_confusion_matrix(xgb_model, X_test, y_test, feature_str)
+    
+    # Compute feature importance if requested
+    if calculate_importance:
+        # Get feature names
+        feature_names = get_feature_names(
+            use_raw_features=use_raw_features,
+            use_autoencoder_features=use_autoencoder_features,
+            include_extra_features=include_extra_features,
+            num_features=X_train.shape[1]
+        )
+        
+        # Compute and plot permutation importance
+        df_importance = compute_permutation_importance(
+            xgb_model, X_test, y_test, 
+            feature_names, 
+            n_repeats=10, 
+            random_state=42,
+            model_name="XGBoost"
+        )
+        
+        # Also plot XGBoost's built-in feature importance
+        try:
+            plot_xgboost_feature_importance(xgb_model, feature_names, feature_str)
+        except Exception as e:
+            print(f"Warning: Could not plot XGBoost feature importance: {e}")
+        
+        # Add feature importance to results
+        result["feature_importance"] = df_importance
+        
+        # SHAP analysis (if shap is available)
+        try:
+            import shap
+            explainer = shap.TreeExplainer(xgb_model)
+            shap_values = explainer.shap_values(X_test)
+            
+            plt.figure(figsize=(12, 8))
+            shap.summary_plot(shap_values, X_test, feature_names=feature_names, show=False)
+            plt.title("SHAP Feature Importance")
+            plt.tight_layout()
+            plt.savefig(f"xgboost_shap_summary_{feature_str.replace(' + ', '_')}.png", dpi=300)
+            plt.close()
+            
+            plt.figure(figsize=(12, 8))
+            shap.summary_plot(shap_values, X_test, feature_names=feature_names, plot_type="bar", show=False)
+            plt.title("SHAP Mean Feature Importance")
+            plt.tight_layout() 
+            plt.savefig(f"xgboost_shap_bar_{feature_str.replace(' + ', '_')}.png", dpi=300)
+            plt.close()
+            
+            print("SHAP analysis completed and saved")
+            result["has_shap"] = True
+        except (ImportError, Exception) as e:
+            print(f"SHAP analysis skipped: {e}")
+            result["has_shap"] = False
+    
+    return result
+
+def plot_learning_curves(eval_results, feature_str):
+    """Plot learning curves from the evaluation results"""
+    if not eval_results:
+        print("No evaluation results available - skipping learning curve plots")
+        return
+    
+    plt.figure(figsize=(15, 10))
+    
+    # Check what metrics are available
+    metrics = []
+    for validation_set in eval_results.keys():
+        for metric in eval_results[validation_set].keys():
+            if metric not in metrics:
+                metrics.append(metric)
+    
+    # Plot available metrics
+    for i, metric in enumerate(metrics, 1):
+        plt.subplot(2, 2, i)
+        for validation_set in eval_results.keys():
+            if metric in eval_results[validation_set]:
+                plt.plot(
+                    eval_results[validation_set][metric], 
+                    label=f"{validation_set} {metric}"
+                )
+        plt.xlabel('Boosting Round')
+        plt.ylabel(metric.upper())
+        plt.title(f'{metric.upper()} Learning Curve')
+        plt.legend()
+        plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(f"xgboost_learning_curves_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    print("Learning curves plotted and saved")
+
+def plot_roc_curve(model, X_test, y_test, feature_str):
+    """Plot ROC curve for the model"""
+    y_proba = model.predict_proba(X_test)[:, 1]
+    fpr, tpr, thresholds = roc_curve(y_test, y_proba)
+    auc = roc_auc_score(y_test, y_proba)
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, label=f'AUC = {auc:.3f}')
+    plt.plot([0, 1], [0, 1], 'k--', label='Random')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"xgboost_roc_curve_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    print("ROC curve plotted and saved")
+
+def plot_precision_recall_curve(model, X_test, y_test, feature_str):
+    """Plot precision-recall curve for the model"""
+    y_proba = model.predict_proba(X_test)[:, 1]
+    precision, recall, thresholds = precision_recall_curve(y_test, y_proba)
+    
+    plt.figure(figsize=(8, 6))
+    plt.plot(recall, precision)
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.grid(True)
+    plt.savefig(f"xgboost_pr_curve_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    print("Precision-Recall curve plotted and saved")
+
+def plot_confusion_matrix(model, X_test, y_test, feature_str):
+    """Plot confusion matrix for the model"""
+    y_pred = model.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+    
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix')
+    plt.savefig(f"xgboost_confusion_matrix_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    print("Confusion matrix plotted and saved")
+
+def plot_xgboost_feature_importance(model, feature_names, feature_str):
+    """Plot XGBoost's built-in feature importance"""
+    # Try different approaches to get feature importance
+    importance_dict = None
+    try:
+        # First try using get_booster().get_score()
+        importance_dict = model.get_booster().get_score(importance_type='gain')
+    except Exception:
+        try:
+            # Then try direct feature_importances_
+            if hasattr(model, 'feature_importances_'):
+                importances = model.feature_importances_
+                importance_dict = {f"f{i}": imp for i, imp in enumerate(importances)}
+        except Exception as e:
+            print(f"Could not extract feature importance from model: {e}")
+            return
+    
+    if not importance_dict:
+        print("No feature importance information available - skipping plot")
+        return
+    
+    # Convert to DataFrame for plotting
+    try:
+        importance_df = pd.DataFrame({
+            'Feature': [feature_names[int(f[1:])] if f.startswith('f') else f for f in importance_dict.keys()],
+            'Importance': list(importance_dict.values())
+        }).sort_values('Importance', ascending=False)
+    except Exception:
+        # Direct approach if the above fails
+        importance_df = pd.DataFrame({
+            'Feature': feature_names[:len(importance_dict)],
+            'Importance': list(importance_dict.values())
+        }).sort_values('Importance', ascending=False)
+    
+    # Plot
+    plt.figure(figsize=(14, 10))
+    top_n = min(30, len(importance_df))
+    importance_df = importance_df.head(top_n).sort_values('Importance')
+    
+    plt.barh(range(len(importance_df)), importance_df['Importance'], color='lightblue')
+    plt.yticks(range(len(importance_df)), importance_df['Feature'])
+    plt.xlabel('Gain')
+    plt.title('XGBoost Feature Importance (Gain)')
+    plt.tight_layout()
+    plt.savefig(f"xgboost_feature_importance_gain_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    print("XGBoost feature importance plotted and saved")
+
+def test_stability(model, X_test, y_test, feature_names, feature_str, 
+                  n_perturbations=10, noise_levels=[0.005, 0.01, 0.02, 0.1],
+                  n_subsamples=5, subsample_fraction=0.8,
+                  n_feature_subsets=5, feature_fraction=0.8):
+    """
+    Comprehensive model stability analysis using multiple approaches:
+    1. Noise perturbation - adding different levels of Gaussian noise
+    2. Data subsampling - testing on different random subsets of test data
+    3. Feature subsampling - testing with random feature subsets
+    
+    Args:
+        model: Trained XGBoost model
+        X_test: Test features
+        y_test: Test labels
+        feature_names: Names of features
+        feature_str: String describing feature set for filenames
+        n_perturbations: Number of perturbations per noise level
+        noise_levels: List of noise standard deviations to test
+        n_subsamples: Number of data subsamples to test
+        subsample_fraction: Fraction of test data to include in each subsample
+        n_feature_subsets: Number of feature subset tests
+        feature_fraction: Fraction of features to include in each subset
+    
+    Returns:
+        Dictionary with stability metrics
+    """
+    print("\n===== COMPREHENSIVE STABILITY ANALYSIS =====")
+    
+    # Original performance baseline
+    original_proba = model.predict_proba(X_test)[:, 1]
+    original_auc = roc_auc_score(y_test, original_proba)
+    print(f"Baseline AUC: {original_auc:.4f}")
+    
+    results = {
+        "baseline": {
+            "auc": original_auc,
+            "proba": original_proba
+        },
+        "noise_perturbation": {},
+        "data_subsampling": {},
+        "feature_subsampling": {}
+    }
+    
+    # 1. Noise Perturbation Analysis - different noise levels
+    print("\n1. NOISE PERTURBATION STABILITY")
+    for noise_level in noise_levels:
+        print(f"\nNoise level: {noise_level}")
+        level_aucs = []
+        level_diffs = []
+        
+        for i in range(n_perturbations):
+            # Add Gaussian noise
+            noise = np.random.normal(0, noise_level, X_test.shape)
+            X_perturbed = X_test + noise
+            
+            # Get predictions
+            perturbed_proba = model.predict_proba(X_perturbed)[:, 1]
+            perturbed_auc = roc_auc_score(y_test, perturbed_proba)
+            
+            # Calculate difference in predictions
+            mean_prob_diff = np.mean(np.abs(perturbed_proba - original_proba))
+            max_prob_diff = np.max(np.abs(perturbed_proba - original_proba))
+            
+            level_aucs.append(perturbed_auc)
+            level_diffs.append(mean_prob_diff)
+            
+            print(f"  Run {i+1}: AUC = {perturbed_auc:.4f} (Δ = {perturbed_auc - original_auc:.4f}), " 
+                  f"Mean prob Δ = {mean_prob_diff:.4f}, Max prob Δ = {max_prob_diff:.4f}")
+        
+        # Store metrics for this noise level
+        results["noise_perturbation"][noise_level] = {
+            "aucs": level_aucs,
+            "mean_auc": np.mean(level_aucs),
+            "std_auc": np.std(level_aucs),
+            "mean_prob_diff": np.mean(level_diffs),
+            "cv": np.std(level_aucs) / np.mean(level_aucs)  # Coefficient of variation
+        }
+        
+        print(f"  Summary: AUC = {np.mean(level_aucs):.4f} ± {np.std(level_aucs):.4f}, "
+              f"CV = {np.std(level_aucs) / np.mean(level_aucs):.4f}, "
+              f"Mean prob Δ = {np.mean(level_diffs):.4f}")
+    
+    # 2. Data Subsampling Analysis
+    print("\n2. DATA SUBSAMPLING STABILITY")
+    subsample_aucs = []
+    
+    for i in range(n_subsamples):
+        # Generate random subsample indices
+        n_samples = int(subsample_fraction * len(y_test))
+        indices = np.random.choice(len(y_test), n_samples, replace=False)
+        
+        # Get predictions for subsample
+        X_sub = X_test[indices]
+        y_sub = y_test[indices]
+        
+        sub_proba = model.predict_proba(X_sub)[:, 1]
+        sub_auc = roc_auc_score(y_sub, sub_proba)
+        
+        subsample_aucs.append(sub_auc)
+        print(f"  Subsample {i+1} ({n_samples} samples): AUC = {sub_auc:.4f} (Δ = {sub_auc - original_auc:.4f})")
+    
+    # Store metrics for subsampling
+    results["data_subsampling"] = {
+        "aucs": subsample_aucs,
+        "mean_auc": np.mean(subsample_aucs),
+        "std_auc": np.std(subsample_aucs),
+        "cv": np.std(subsample_aucs) / np.mean(subsample_aucs)
+    }
+    
+    print(f"  Summary: AUC = {np.mean(subsample_aucs):.4f} ± {np.std(subsample_aucs):.4f}, "
+          f"CV = {np.std(subsample_aucs) / np.mean(subsample_aucs):.4f}")
+    
+    # 3. Feature Subsampling Analysis
+    print("\n3. FEATURE SUBSAMPLING STABILITY")
+    feature_subset_aucs = []
+    
+    n_features = X_test.shape[1]
+    n_features_to_keep = int(feature_fraction * n_features)
+    
+    for i in range(n_feature_subsets):
+        # Generate random feature subset
+        feature_indices = np.random.choice(n_features, n_features_to_keep, replace=False)
+        X_feature_sub = X_test[:, feature_indices]
+        
+        # Train a new model on the same training data but with subset of features
+        # (We'd need to use X_train with the same feature subset)
+        # Instead, we'll use a workaround - set non-selected features to their mean value
+        X_feature_masked = X_test.copy()
+        mask = np.ones(n_features, dtype=bool)
+        mask[feature_indices] = False
+        
+        # For columns not in our subset, replace with mean values (neutralizing them)
+        feature_means = np.mean(X_test, axis=0)
+        for j in range(n_features):
+            if mask[j]:
+                X_feature_masked[:, j] = feature_means[j]
+        
+        # Get predictions
+        feature_sub_proba = model.predict_proba(X_feature_masked)[:, 1]
+        feature_sub_auc = roc_auc_score(y_test, feature_sub_proba)
+        
+        feature_subset_aucs.append(feature_sub_auc)
+        print(f"  Feature subset {i+1} ({n_features_to_keep} features): "
+              f"AUC = {feature_sub_auc:.4f} (Δ = {feature_sub_auc - original_auc:.4f})")
+    
+    # Store metrics for feature subsampling
+    results["feature_subsampling"] = {
+        "aucs": feature_subset_aucs,
+        "mean_auc": np.mean(feature_subset_aucs),
+        "std_auc": np.std(feature_subset_aucs),
+        "cv": np.std(feature_subset_aucs) / np.mean(feature_subset_aucs)
+    }
+    
+    print(f"  Summary: AUC = {np.mean(feature_subset_aucs):.4f} ± {np.std(feature_subset_aucs):.4f}, "
+          f"CV = {np.std(feature_subset_aucs) / np.mean(feature_subset_aucs):.4f}")
+    
+    # Plot comprehensive stability results
+    plt.figure(figsize=(15, 10))
+    
+    # 1. Noise perturbation results - AUC by noise level
+    plt.subplot(2, 2, 1)
+    noise_data = []
+    noise_labels = []
+    for noise_level in noise_levels:
+        noise_data.append(results["noise_perturbation"][noise_level]["aucs"])
+        noise_labels.append(f"σ={noise_level}")
+    
+    plt.boxplot(noise_data, labels=noise_labels)
+    plt.axhline(y=original_auc, color='r', linestyle='--', label=f'Baseline AUC={original_auc:.4f}')
+    plt.xlabel('Noise Level')
+    plt.ylabel('AUC')
+    plt.title('Noise Perturbation Stability')
+    plt.legend()
+    plt.grid(True)
+    
+    # 2. Data subsampling results
+    plt.subplot(2, 2, 2)
+    plt.boxplot([subsample_aucs], labels=[f'{subsample_fraction*100}% Data'])
+    plt.axhline(y=original_auc, color='r', linestyle='--', label=f'Baseline AUC={original_auc:.4f}')
+    plt.ylabel('AUC')
+    plt.title('Data Subsampling Stability')
+    plt.legend()
+    plt.grid(True)
+    
+    # 3. Feature subsampling results
+    plt.subplot(2, 2, 3)
+    plt.boxplot([feature_subset_aucs], labels=[f'{feature_fraction*100}% Features'])
+    plt.axhline(y=original_auc, color='r', linestyle='--', label=f'Baseline AUC={original_auc:.4f}')
+    plt.ylabel('AUC')
+    plt.title('Feature Subsampling Stability')
+    plt.legend()
+    plt.grid(True)
+    
+    # 4. Summary - Coefficient of Variation comparison
+    plt.subplot(2, 2, 4)
+    cv_values = [
+        *[results["noise_perturbation"][level]["cv"] for level in noise_levels],
+        results["data_subsampling"]["cv"],
+        results["feature_subsampling"]["cv"]
+    ]
+    cv_labels = [
+        *[f'Noise σ={level}' for level in noise_levels],
+        'Data Subsample',
+        'Feature Subset'
+    ]
+    plt.bar(range(len(cv_values)), cv_values)
+    plt.xticks(range(len(cv_values)), cv_labels, rotation=45, ha='right')
+    plt.ylabel('Coefficient of Variation (σ/μ)')
+    plt.title('Stability Comparison (lower is better)')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(f"xgboost_comprehensive_stability_{feature_str.replace(' + ', '_')}.png", dpi=300)
+    plt.close()
+    
+    print("\nComprehensive stability analysis plotted and saved")
+    
+    # Generate stability score (1-10 scale, lower CV is better)
+    avg_cv = np.mean([
+        np.mean([results["noise_perturbation"][level]["cv"] for level in noise_levels]),
+        results["data_subsampling"]["cv"],
+        results["feature_subsampling"]["cv"]
+    ])
+    
+    # Convert to a 1-10 scale (empirically determined)
+    # CV of 0.01 or less is excellent (score 10)
+    # CV of 0.05 or more is poor (score 1)
+    stability_score = max(1, min(10, 10 - 180 * avg_cv))
+    
+    print(f"\nOVERALL STABILITY SCORE: {stability_score:.1f}/10")
+    if stability_score >= 9:
+        print("EXCELLENT STABILITY: Model is extremely robust to variations in data and features.")
+    elif stability_score >= 7:
+        print("GOOD STABILITY: Model shows strong robustness to variations.")
+    elif stability_score >= 5:
+        print("MODERATE STABILITY: Model shows acceptable robustness but some sensitivity.")
+    else:
+        print("POOR STABILITY: Model shows high sensitivity to variations. Consider more robust techniques.")
+    
+    # Add overall score to results
+    results["stability_score"] = stability_score
+    
+    return results
+
+def run_analysis():
+    """Run comprehensive XGBoost analysis"""
+    # Train and analyze the model
+    result = train_and_analyze_xgboost(
+        use_raw_features=True,
+        use_autoencoder_features=True,
+        include_extra_features=True,
+        calculate_importance=True,
+        validation_reporting=True
+    )
+    
+    # Get feature names for stability analysis
+    feature_names = get_feature_names(
+        use_raw_features=True,
+        use_autoencoder_features=True,
+        include_extra_features=True,
+        num_features=result["feature_importance"].shape[1] if hasattr(result["feature_importance"], "shape") else 0
+    )
+    
+    # Reload data for stability analysis (to ensure we have the exact test set)
+    _, _, X_test, _, _, y_test = load_labeled_data(
+        use_raw_features=True,
+        use_autoencoder_features=True,
+        include_extra_features=True
+    )
+    
+    # Run stability analysis with updated parameter names
+    stability_results = test_stability(
+        model=result["xgb_model"],
+        X_test=X_test,
+        y_test=y_test,
+        feature_names=feature_names,
+        feature_str="raw_autoencoder_extra",
+        # Default parameters - can be adjusted as needed
+        n_perturbations=5,           # Number of runs per noise level
+        noise_levels=[0.005, 0.01],  # Test two noise levels (lower for faster results)
+        n_subsamples=3,              # 3 data subsample tests
+        n_feature_subsets=3          # 3 feature subset tests
+    )
+    
+    # Add stability results to the main results
+    result["stability"] = stability_results
+    
+    print("\n===== ANALYSIS SUMMARY =====")
+    print(f"Model: {result['model']}")
+    print(f"Test AUC: {result['test_auc']:.3f}")
+    
+    if "stability_score" in stability_results:
+        print(f"Stability Score: {stability_results['stability_score']:.1f}/10")
+    
+    return result
+
+if __name__ == "__main__":
+    run_analysis()
