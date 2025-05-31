@@ -1,0 +1,40 @@
+# Problem
+```{python}
+import pandas as pd
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
+
+# load Galton data
+galton = sm.datasets.get_rdataset("GaltonFamilies", "HistData").data
+
+# calculate midparentHeight
+galton['midparentHeight'] = (galton['father'] + 1.08 * galton['mother']) / 2
+
+# setup X and Y
+X = galton['midparentHeight']
+Y = galton['childHeight']
+
+# add constants for X
+X = sm.add_constant(X)
+
+# OLS regression
+model = sm.OLS(Y, X).fit()
+print(model.summary())
+
+# sactter plot
+plt.figure(figsize=(8, 6))
+plt.scatter(galton['midparentHeight'], galton['childHeight'], alpha=0.5,\
+             label='Data')
+
+# regression line
+x_vals = pd.Series([min(X['midparentHeight']), max(X['midparentHeight'])])
+y_vals = model.params[0] + model.params[1] * x_vals
+plt.plot(x_vals, y_vals, color='red', label='Regression Line')
+
+# lable
+plt.xlabel("Midparent Height (inches)")
+plt.ylabel("Child Height (inches)")
+plt.title("Galton's Regression of Child Height on Midparent Height")
+plt.legend()
+plt.show()
+```
